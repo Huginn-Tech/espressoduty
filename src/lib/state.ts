@@ -186,6 +186,11 @@ export function publish(): void {
   }
 }
 
+/** Open dashboard streams, for the /api/stream connection cap. */
+export function listenerCount(): number {
+  return getStore().listeners.size;
+}
+
 export function subscribe(fn: Listener): () => void {
   const s = getStore();
   s.listeners.add(fn);

@@ -20,6 +20,7 @@ import { EspressoClient, hexStakeToEsp, type ValidatorInfo } from './espresso';
 import { sendAlert, type AlertEvent } from './alerts';
 import { getStore, publish, pushSample, type NetworkView, type ValidatorView, type EndpointView } from './state';
 import { loadPersisted, savePersisted, stateFilePath, type PersistedState } from './persist';
+import { versionBehind } from './version';
 
 const cfg = loadConfig();
 
@@ -778,19 +779,12 @@ interface NodeMetrics {
   timeoutsAsLeader: number | null;
   /** The node's own BLS key, to back up the RIGHT card with multiple validators. */
   nodeKey: string | null;
-  /** Build tag (consensus_version desc, e.g. "20260722"). */
+  /** Build tag (consensus_version desc, e.g. "0.6.3.17" or the older "20260722"). */
   version: string | null;
 }
 
-/** Release tags are dated (YYYYMMDD); anything else is not comparable. */
-const VERSION_TAG_RE = /^\d{8}$/;
-
-/** True when both tags are dated and the local one is older. */
-export function versionBehind(local: string | null, reference: string | null): boolean {
-  if (!local || !reference) return false;
-  if (!VERSION_TAG_RE.test(local) || !VERSION_TAG_RE.test(reference)) return false;
-  return local < reference;
-}
+// Dated (20260722) and dotted (0.6.3.17) tags; see ./version.
+export { versionBehind };
 
 /** How often to re-read the reference version from the public endpoint. */
 const VERSION_REFRESH_MS = 10 * 60_000;

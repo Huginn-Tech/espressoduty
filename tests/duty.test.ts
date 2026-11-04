@@ -219,4 +219,18 @@ describe('version comparison', () => {
     expect(versionBehind(null, '20260722')).toBe(false);
     expect(versionBehind('20260721', null)).toBe(false);
   });
+
+  it('flags an older dotted release (0.6.3.12 behind 0.6.3.17)', () => {
+    expect(versionBehind('0.6.3.12', '0.6.3.17')).toBe(true);
+    expect(versionBehind('v0.6.3', '0.6.4')).toBe(true);
+    expect(versionBehind('0.6.3', '0.6.3.1')).toBe(true);
+  });
+
+  it('compares dotted parts as numbers and ignores mixed shapes', () => {
+    expect(versionBehind('0.6.10.0', '0.6.9.9')).toBe(false);
+    expect(versionBehind('0.6.3.17', '0.6.3.17')).toBe(false);
+    expect(versionBehind('0.6.3.0', '0.6.3')).toBe(false);
+    expect(versionBehind('0.6.3.12', '20260722')).toBe(false);
+    expect(versionBehind('20260721', '0.6.3.17')).toBe(false);
+  });
 });
