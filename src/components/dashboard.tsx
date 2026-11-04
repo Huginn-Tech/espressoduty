@@ -13,6 +13,7 @@ import { useTheme } from 'next-themes';
 import { Activity, Copy, Github, Moon, Sun, Check } from 'lucide-react';
 import clsx from 'clsx';
 import { sampleKind, type Snapshot, type NetworkView, type ValidatorView } from '@/lib/state';
+import { compareVersions } from '@/lib/version';
 
 // Display thresholds for the missed-slots color; the server owns alerting.
 const MISSED_WARN = Number(process.env.NEXT_PUBLIC_MISSED_WARN ?? 0.5);
@@ -26,6 +27,13 @@ function missedColor(missed: number | null): string {
   if (missed > MISSED_CRIT) return 'var(--crit)';
   if (missed > MISSED_WARN) return 'var(--warn)';
   return 'var(--ok)';
+}
+
+/** Amber while the node runs an older build than Espresso's own infra. */
+function versionColor(local: string | null, reference: string | null): string | undefined {
+  const cmp = compareVersions(local, reference);
+  if (cmp === null) return undefined;
+  return cmp < 0 ? 'var(--warn)' : 'var(--ok)';
 }
 
 function fmtPct(x: number | null | undefined, digits = 2): string {
@@ -216,13 +224,7 @@ function StatusLine({ net, localNode }: { net: NetworkView; localNode: Snapshot[
         <Field
           k="version"
           v={localNode.version}
-          color={
-            localNode.refVersion && /^\d{8}$/.test(localNode.version) && /^\d{8}$/.test(localNode.refVersion)
-              ? localNode.version < localNode.refVersion
-                ? 'var(--warn)'
-                : 'var(--ok)'
-              : undefined
-          }
+          color={versionColor(localNode.version, localNode.refVersion)}
           title={localNode.refVersion ? `network: ${localNode.refVersion}` : undefined}
         />
       )}
