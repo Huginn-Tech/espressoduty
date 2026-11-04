@@ -124,7 +124,6 @@ export interface Snapshot {
   now: number;
   networks: NetworkView[];
   localNode: LocalNodeView | null;
-  channels: string[];
 }
 
 type Listener = (snapshot: Snapshot) => void;
@@ -168,7 +167,8 @@ export function snapshot(): Snapshot {
       endpoints: n.endpoints.map((e) => (e.isLocal ? { ...e, url: 'local' } : e)),
     })),
     localNode: s.localNode ? { ...s.localNode, url: 'local' } : null,
-    channels: s.channels,
+    // Which alert channels are wired up is the operator's business; the
+    // dashboard never shows it, so it stays server-side like the node URL.
   };
 }
 
