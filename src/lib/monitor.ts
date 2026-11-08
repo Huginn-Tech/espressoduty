@@ -20,7 +20,7 @@ import { EspressoClient, hexStakeToEsp, type ValidatorInfo } from './espresso';
 import { sendAlert, type AlertEvent } from './alerts';
 import { getStore, publish, pushSample, type NetworkView, type ValidatorView, type EndpointView } from './state';
 import { loadPersisted, savePersisted, stateFilePath, type PersistedState } from './persist';
-import { versionBehind } from './version';
+import { versionBehind, currentRelease, versionAlertDue, type ReleaseInfo } from './version';
 
 const cfg = loadConfig();
 
@@ -82,10 +82,11 @@ interface LocalMachine {
   stuckSince: number | null;
   stuckPdTriggered: boolean;
   downPdTriggered: boolean;
-  /** Build tag Espresso's public infra runs, refreshed every few minutes. */
+  /** Current mainnet release (the GitHub release titled "[mainnet]"), refreshed every 30 minutes. */
   refVersion: string | null;
   refVersionAt: number;
-  versionAlerted: boolean;
+  /** The release the last "version behind" alert named; null once the node reached it. */
+  versionAlertedFor: string | null;
 }
 
 const machines = new Map<NetworkName, NetworkMachine>();
@@ -94,16 +95,28 @@ let localMachine: LocalMachine | null = null;
 const cooldowns = new Map<string, number>();
 const timers: NodeJS.Timeout[] = [];
 
+/** Keys whose last delivery failed: their cooldown entry is only the retry delay. */
+const retryPending = new Set<string>();
+
 function cooldownOk(key: string): boolean {
   const last = cooldowns.get(key) ?? 0;
   if (Date.now() - last < cfg.alertCooldownMin * 60_000) return false;
   cooldowns.set(key, Date.now());
+  retryPending.delete(key);
   return true;
 }
 
-/** A failed delivery gives its cooldown back, so the retry isn't blocked. */
+/**
+ * After a failed delivery, the soonest retry. Not the next poll: a delivery
+ * that timed out may still have arrived, and a retry on every 10-15s poll
+ * then repeats the same message several times in a row.
+ */
+const FAILED_DELIVERY_RETRY_MS = 2 * 60_000;
+
+/** A failed delivery gives its cooldown back, except for a short retry delay. */
 function refundCooldown(key: string): void {
-  cooldowns.delete(key);
+  cooldowns.set(key, Date.now() - cfg.alertCooldownMin * 60_000 + FAILED_DELIVERY_RETRY_MS);
+  retryPending.add(key);
 }
 
 /**
@@ -610,7 +623,8 @@ async function onValidatorMissing(
   }
 
   vm.missingSince = Date.now();
-  if (cooldownOk(`${net.name}:${vv.key}:missing`)) {
+  const key = `${net.name}:${vv.key}:missing`;
+  if (cooldownOk(key)) {
     vm.missingAlerted = await sendAlert({
       severity: 'critical',
       title: 'Not in the active set',
@@ -618,7 +632,7 @@ async function onValidatorMissing(
       network: net.name,
       link: explorerLink(net),
     });
-    if (!vm.missingAlerted) refundCooldown(`${net.name}:${vv.key}:missing`);
+    if (!vm.missingAlerted) refundCooldown(key);
     // Dropping out of the set entirely pages, like a critical missed-slots streak.
     if (vm.missingAlerted && !vm.missingPdTriggered) {
       vm.missingPdTriggered = await sendAlert({
@@ -630,8 +644,8 @@ async function onValidatorMissing(
         pagerduty: 'trigger',
       });
     }
-  } else {
-    vm.missingAlerted = true; // inside the cooldown window: suppress repeats
+  } else if (!retryPending.has(key)) {
+    vm.missingAlerted = true; // inside a delivered alert's cooldown: suppress repeats
   }
 }
 
@@ -786,19 +800,30 @@ interface NodeMetrics {
 // Dated (20260722) and dotted (0.6.3.17) tags; see ./version.
 export { versionBehind };
 
-/** How often to re-read the reference version from the public endpoint. */
-const VERSION_REFRESH_MS = 10 * 60_000;
+/** How often to re-read the current release (GitHub allows 60 unauthenticated requests an hour). */
+const VERSION_REFRESH_MS = 30 * 60_000;
 
-/** The build Espresso's own public infra runs — what a validator should match. */
-async function fetchNetworkVersion(base: string): Promise<string | null> {
-  const url = `${base.replace(/\/$/, '')}/status/metrics`;
+const RELEASES_REPO = 'EspressoSystems/espresso-network';
+
+/**
+ * The release Espresso currently ships on `network` — what a node there
+ * should run. Not the build the public query service reports: its load
+ * balancer mixes servers, and on 2026-11-07 one of the three behind
+ * query.main.net ran the decaf-only 0.7.0.6, so each refresh drew 0.6.3.17
+ * or 0.7.0.6 at random and the alert flapped all night.
+ */
+async function fetchCurrentRelease(network: 'mainnet' | 'decaf'): Promise<string | null> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), cfg.statusPollTimeoutSec * 1000);
   try {
-    const res = await fetch(url, { signal: ctrl.signal, cache: 'no-store' });
+    const res = await fetch(`https://api.github.com/repos/${RELEASES_REPO}/releases?per_page=30`, {
+      signal: ctrl.signal,
+      cache: 'no-store',
+      headers: { accept: 'application/vnd.github+json', 'user-agent': 'espressoduty' },
+    });
     if (!res.ok) return null;
-    const text = await res.text();
-    return text.match(/consensus_version\{[^}]*desc="([^"]+)"/)?.[1] ?? null;
+    const releases = (await res.json()) as ReleaseInfo[];
+    return Array.isArray(releases) ? currentRelease(releases, network) : null;
   } catch {
     return null;
   } finally {
@@ -922,30 +947,33 @@ async function pollLocalNode(): Promise<void> {
       view.lastDecidedView = metrics.lastDecidedView;
       if (metrics.version) view.version = metrics.version;
 
-      // Version check: compare against what Espresso's own infra runs.
-      // Caught the 2026-07-22 emergency patch scenario: local 20260721
-      // while the public endpoint already ran 20260722.
+      // Version check against the current mainnet release (the local node
+      // is the operator's mainnet node; remoteBase is set iff mainnet is
+      // configured). A failed read keeps the last known release.
       if (lm.remoteBase && Date.now() - lm.refVersionAt >= VERSION_REFRESH_MS) {
         lm.refVersionAt = Date.now();
-        const ref = await fetchNetworkVersion(lm.remoteBase);
+        const ref = await fetchCurrentRelease('mainnet');
         if (ref) lm.refVersion = ref;
       }
       view.refVersion = lm.refVersion;
-      if (versionBehind(view.version, lm.refVersion)) {
-        if (lm.initialized && !lm.versionAlerted && cooldownOk('local:version')) {
-          lm.versionAlerted = await sendAlert({
-            severity: 'warning',
-            title: 'Node version behind',
-            lines: [`📦 ${view.version} → ${lm.refVersion}`, '⬆️ update your node'],
-          });
-          if (!lm.versionAlerted) refundCooldown('local:version');
-        }
-      } else if (lm.versionAlerted && view.version) {
-        lm.versionAlerted = false;
+      const due = versionAlertDue(view.version, lm.refVersion, lm.versionAlertedFor);
+      if (due === 'behind' && lm.initialized && cooldownOk('local:version')) {
+        const sent = await sendAlert({
+          severity: 'warning',
+          title: 'Node version behind',
+          lines: [`📦 ${view.version} → ${lm.refVersion}`, '⬆️ update your node'],
+          network: 'mainnet',
+          link: { label: 'Release', url: `https://github.com/${RELEASES_REPO}/releases/tag/${lm.refVersion}` },
+        });
+        if (sent) lm.versionAlertedFor = lm.refVersion;
+        else refundCooldown('local:version');
+      } else if (due === 'current') {
+        lm.versionAlertedFor = null;
         await sendAlert({
           severity: 'recovered',
           title: 'Node version current',
           lines: [`📦 ${view.version}`],
+          network: 'mainnet',
         });
       }
 
@@ -1124,7 +1152,7 @@ export function startMonitoring(): void {
       downPdTriggered: false,
       refVersion: null,
       refVersionAt: 0,
-      versionAlerted: false,
+      versionAlertedFor: null,
     };
     store.localNode = {
       url: cfg.localNodeUrl,

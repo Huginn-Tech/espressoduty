@@ -29,7 +29,7 @@ function missedColor(missed: number | null): string {
   return 'var(--ok)';
 }
 
-/** Amber while the node runs an older build than Espresso's own infra. */
+/** Amber while the node runs an older build than the current mainnet release. */
 function versionColor(local: string | null, reference: string | null): string | undefined {
   const cmp = compareVersions(local, reference);
   if (cmp === null) return undefined;
@@ -225,7 +225,7 @@ function StatusLine({ net, localNode }: { net: NetworkView; localNode: Snapshot[
           k="version"
           v={localNode.version}
           color={versionColor(localNode.version, localNode.refVersion)}
-          title={localNode.refVersion ? `network: ${localNode.refVersion}` : undefined}
+          title={localNode.refVersion ? `mainnet release: ${localNode.refVersion}` : undefined}
         />
       )}
     </div>

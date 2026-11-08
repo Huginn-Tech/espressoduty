@@ -113,9 +113,9 @@ export interface LocalNodeView {
   lastDecidedView: number | null;
   /** True while the node responds but its view number is not advancing. */
   stuck: boolean;
-  /** The node's build tag (consensus_version desc, e.g. "20260722"). */
+  /** The node's build tag (consensus_version desc, e.g. "0.6.3.17"). */
   version: string | null;
-  /** The build tag Espresso's own public infra runs — the reference. */
+  /** The current mainnet release (the GitHub release titled "[mainnet]") — the reference. */
   refVersion: string | null;
 }
 

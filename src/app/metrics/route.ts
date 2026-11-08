@@ -74,7 +74,7 @@ export function GET() {
       [{}, ln.stuck ? 1 : 0],
     ]);
     const cmp = compareVersions(ln.version, ln.refVersion);
-    gauge('espressoduty_local_node_version_behind', 'Local node build older than Espresso public infra (0/1)', [
+    gauge('espressoduty_local_node_version_behind', 'Local node build older than the current mainnet release (0/1)', [
       [{}, cmp === null ? null : cmp < 0 ? 1 : 0],
     ]);
   }

@@ -147,18 +147,29 @@ describe('leader-duty state machine', () => {
     expect(m.prevMissed).toBe(3); // no catch-up alert after recovery
   });
 
-  it('retries an alert whose delivery failed instead of counting it as sent', async () => {
-    vi.mocked(sendAlert).mockImplementationOnce(async (ev: unknown) => {
-      alerts.push(ev as (typeof alerts)[number]);
-      return false; // webhook 500 etc.
-    });
-    const m = vm({ prevProposals: 55, prevMissed: 2, missStreak: 2 });
-    const v = vv();
-    await evaluateLeaderDuty(net, v, m, entry(55, 58), 471, false); // miss 3 -> send fails
-    expect(m.trendAlerted).toBe(false);
-    await evaluateLeaderDuty(net, v, m, entry(55, 59), 471, false); // miss 4 -> retried, delivered
-    expect(m.trendAlerted).toBe(true);
-    expect(alerts.filter((a) => a.severity === 'warning')).toHaveLength(2);
+  it('retries an alert whose delivery failed instead of counting it as sent, after a delay', async () => {
+    // Not on the very next poll: a delivery that timed out may still have
+    // arrived, and an immediate retry would repeat it.
+    vi.useFakeTimers({ now: new Date('2026-11-08T01:21:00Z') });
+    try {
+      vi.mocked(sendAlert).mockImplementationOnce(async (ev: unknown) => {
+        alerts.push(ev as (typeof alerts)[number]);
+        return false; // webhook 500, or a timeout
+      });
+      const m = vm({ prevProposals: 55, prevMissed: 2, missStreak: 2 });
+      const v = vv();
+      await evaluateLeaderDuty(net, v, m, entry(55, 58), 471, false); // miss 3 -> send fails
+      expect(m.trendAlerted).toBe(false);
+      vi.setSystemTime(new Date('2026-11-08T01:21:15Z'));
+      await evaluateLeaderDuty(net, v, m, entry(55, 59), 471, false); // miss 4, 15s later: held back
+      expect(m.trendAlerted).toBe(false);
+      vi.setSystemTime(new Date('2026-11-08T01:23:30Z'));
+      await evaluateLeaderDuty(net, v, m, entry(55, 60), 471, false); // miss 5 -> retried, delivered
+      expect(m.trendAlerted).toBe(true);
+      expect(alerts.filter((a) => a.severity === 'warning')).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('never lets a streak cross an epoch boundary (the 03:15 "2 in a row · 1/17" case)', async () => {
